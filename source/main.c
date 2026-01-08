@@ -306,6 +306,12 @@ int main(int argc, char **argv)
 	bool keyLComboPressed = false;
 	bool keyRComboPressed = false;
 
+	/* track hold time for L and R so they only change song after 1s hold */
+	u64 lPressTime = 0;
+	u64 rPressTime = 0;
+	bool lHoldTriggered = false;
+	bool rHoldTriggered = false;
+
 	gfxInitDefault();
 	consoleInit(GFX_TOP, &topScreenLog);
 	consoleInit(GFX_TOP, &topScreenInfo);
@@ -373,6 +379,28 @@ int main(int argc, char **argv)
 		kDown = hidKeysDown();
 		kHeld = hidKeysHeld();
 		kUp = hidKeysUp();
+
+		/* track press times for L and R to support 1s hold to change songs */
+		if (kDown & KEY_L) {
+			lPressTime = osGetTime();
+			lHoldTriggered = false;
+		}
+		if (kDown & KEY_R) {
+			rPressTime = osGetTime();
+			rHoldTriggered = false;
+		}
+		if (kUp & KEY_L) {
+			lPressTime = 0;
+			lHoldTriggered = false;
+			/* clear combo flag on release */
+			keyLComboPressed = false;
+		}
+		if (kUp & KEY_R) {
+			rPressTime = 0;
+			rHoldTriggered = false;
+			/* clear combo flag on release */
+			keyRComboPressed = false;
+		}
 
 		consoleSelect(&bottomScreen);
 
@@ -580,17 +608,15 @@ int main(int argc, char **argv)
 			}
 		}
 
-		// ignore R release if key combo with R used
-		bool keyRActivation = false;
-		if (kUp & KEY_R) {
-			if (!keyRComboPressed) {
-				keyRActivation = true;
-			}
-			keyRComboPressed = false;
-		}
-		bool goToNextFile = (kDown & KEY_ZR) || keyRActivation;
-		// check that next entry is a file
-		if (goToNextFile && fileNum < fileMax && dirList.dirNum < fileNum+1) {
+		/* 
+		 * Handle song change for R and L:
+		 * - Instant change with ZR / ZL (unchanged)
+		 * - L/R physical buttons now require a 1 second continuous hold
+		 *   and are ignored if they were part of a combo (pause) press.
+		 */
+
+		/* Instant next (ZR) */
+		if ((kDown & KEY_ZR) && fileNum < fileMax && dirList.dirNum < fileNum+1) {
 			fileNum += 1;
 			if(fileNum >= MAX_LIST && fileMax - fileNum >= 0 &&
 					from < fileMax - MAX_LIST)
@@ -598,36 +624,67 @@ int main(int argc, char **argv)
 			consoleSelect(&topScreenInfo);
 			consoleClear();
 			consoleSelect(&topScreenLog);
-			//consoleClear();
 			changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
 			error = 0;
 			consoleSelect(&bottomScreen);
 			if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
 			continue;
 		}
-		// ignore L release if key combo with L used
-		bool keyLActivation = false;
-		if (kUp & KEY_L) {
-			if (!keyLComboPressed) {
-				keyLActivation = true;
-			}
-			keyLComboPressed = false;
-		}
-		bool goToPrevFile = (kDown & KEY_ZL) || keyLActivation;
-		// don't go to ../ and check that previous entry is a file
-		if (goToPrevFile && fileNum > 1 && dirList.dirNum < fileNum-1) {
+
+		/* Instant previous (ZL) */
+		if ((kDown & KEY_ZL) && fileNum > 1 && dirList.dirNum < fileNum-1) {
 			fileNum -= 1;
 			if(fileMax - fileNum > MAX_LIST-2 && from != 0)
 				from--;
 			consoleSelect(&topScreenInfo);
 			consoleClear();
 			consoleSelect(&topScreenLog);
-			//consoleClear();
 			changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
 			error = 0;
 			consoleSelect(&bottomScreen);
 			if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
 			continue;
+		}
+
+		/* R held for >=1000ms: Next song (only if not part of combo) */
+		if ((kHeld & KEY_R) && rPressTime != 0 && !rHoldTriggered && !keyRComboPressed) {
+			if (osGetTime() - rPressTime >= 1000) {
+				if (fileNum < fileMax && dirList.dirNum < fileNum+1) {
+					fileNum += 1;
+					if(fileNum >= MAX_LIST && fileMax - fileNum >= 0 &&
+							from < fileMax - MAX_LIST)
+						from++;
+					consoleSelect(&topScreenInfo);
+					consoleClear();
+					consoleSelect(&topScreenLog);
+					changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
+					error = 0;
+					consoleSelect(&bottomScreen);
+					if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
+				}
+				rHoldTriggered = true;
+				continue;
+			}
+		}
+
+		/* L held for >=1000ms: Previous song (only if not part of combo) */
+		if ((kHeld & KEY_L) && lPressTime != 0 && !lHoldTriggered && !keyLComboPressed) {
+			if (osGetTime() - lPressTime >= 1000) {
+				if (fileNum > 1 && dirList.dirNum < fileNum-1) {
+					fileNum -= 1;
+					if(fileMax - fileNum > MAX_LIST-2 && from != 0)
+						from--;
+					consoleSelect(&topScreenInfo);
+					consoleClear();
+					consoleSelect(&topScreenLog);
+					changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
+					error = 0;
+					consoleSelect(&bottomScreen);
+					if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
+				}
+				lHoldTriggered = true;
+				continue;
+			}
 		}
 
 		// play next song automatically
