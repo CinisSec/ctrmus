@@ -22,9 +22,9 @@ The latest 3DSX/CIA/3DS download can be found on the <a href="https://github.com
 
 **B**: Go up folder
 
-**Up & down** = Move cursor
+**Up & down**: Move cursor
 
-**Left & right** = Move cursor skipping 13 files at a time.
+**Left & right**: Move cursor skipping 13 files at a time.
 
 **Start**: Exit
 
