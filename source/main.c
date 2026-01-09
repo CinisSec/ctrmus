@@ -169,6 +169,10 @@ static int getDir(struct dirList_t* dirList)
 
 	while((ep = readdir(dp)) != NULL)
 	{
+		/* Skip hidden entries (names starting with '.') */
+		if(ep->d_name[0] == '.')
+			continue;
+
 		if(ep->d_type == DT_DIR)
 		{
 			/* Add more space for another pointer to a dirent struct */
@@ -276,6 +280,8 @@ int getNumberFiles(void)
 		goto err;
 
 	while((ep = readdir(dp)) != NULL)
+		if(ep->d_name[0] == '.')
+			continue;
 		ret++;
 
 	closedir(dp);
