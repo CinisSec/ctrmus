@@ -24,6 +24,7 @@
 
 #define MAX_PRESSES 3 // for song skipping - will take three consecutive presses
 					  // of the L/ZL or R/ZR buttons to get to the next song
+
 volatile bool runThreads = true;
 
 /**
@@ -325,18 +326,28 @@ int main(int argc, char **argv)
 	/* track hold time for L and R so they only change song after 1s hold */
 	u64 lPressTime = 0;
 	u64 rPressTime = 0;
-	bool lHoldTriggered = false;
-	bool rHoldTriggered = false;
+	//bool lHoldTriggered = false;
+	//bool rHoldTriggered = false;
+	
+	static u64 lPressCount[MAX_PRESSES] = {0};
+	static u64 rPressCount[MAX_PRESSES] = {0};
+	static int lPressIdx = 0;
+	static int rPressIdx = 0;	
 
 	/* track hold time for ZL and ZR*/
 	u64 zlPressTime = 0;
 	u64 zrPressTime = 0;
-	bool zlHoldTriggered = false;
-	bool zrHoldTriggered = false;
+	//bool zlHoldTriggered = false;
+	//bool zrHoldTriggered = false;
 
-	u64 press_count[MAX_PRESSES] = {0}; // for song skipping
-	int press_idx = 0;
-
+	/* track press count for ZL and ZR  */
+	static u64 zlPressCount[MAX_PRESSES] = {0};
+	static u64 zrPressCount[MAX_PRESSES] = {0};
+	static int zlPressIdx = 0;
+	static int zrPressIdx = 0;
+	
+	static u64 lastSkipTime = 0;
+	
 	gfxInitDefault();
 	consoleInit(GFX_TOP, &topScreenLog);
 	consoleInit(GFX_TOP, &topScreenInfo);
@@ -404,51 +415,54 @@ int main(int argc, char **argv)
 		kDown = hidKeysDown();
 		kHeld = hidKeysHeld();
 		kUp = hidKeysUp();
+		
+		u64 now = osGetTime();
+		int count = 0;
 
 		/* track press times for L and R to support 2s hold to change songs */
 		if (kDown & KEY_L) {
 			lPressTime = osGetTime();
-			lHoldTriggered = false;
-		}
-		if (kDown & KEY_R) {
+			//lHoldTriggered = false;
+			lPressCount[lPressIdx] = lPressTime;
+			lPressIdx = (lPressIdx + 1) % MAX_PRESSES;
+		} else if (kDown & KEY_R) {
 			rPressTime = osGetTime();
-			rHoldTriggered = false;
+			//rHoldTriggered = false;
+			rPressCount[rPressIdx] = rPressTime;
+			rPressIdx = (rPressIdx + 1) % MAX_PRESSES;
+
 		}
 		if (kUp & KEY_L) {
 			lPressTime = 0;
-			lHoldTriggered = false;
+			//lHoldTriggered = false;
 			/* clear combo flag on release */
 			keyLComboPressed = false;
 		}
 		if (kUp & KEY_R) {
 			rPressTime = 0;
-			rHoldTriggered = false;
+			//rHoldTriggered = false;
 			/* clear combo flag on release */
 			keyRComboPressed = false;
 		}
 
-		/* track press times for ZL and ZR to support 2s hold to change songs */
+		/* track press times for ZL and ZR to enable song skipping logic */
 		if (kDown & KEY_ZL) {
 			zlPressTime = osGetTime();
-			zlHoldTriggered = false;
-			press_count[press_idx] = zlPressTime;
-			press_idx = (press_idx + 1) % MAX_PRESSES;
-		}
-		if (kDown & KEY_ZR) {
+			zlPressCount[zlPressIdx] = zlPressTime;
+			zlPressIdx = (zlPressIdx + 1) % MAX_PRESSES;
+		} else if (kDown & KEY_ZR) { // Prioritizes checking the count of ZL over ZR's, making it to where if both buttons are
+									 // pressed three times, the index doesn't increment.
 			zrPressTime = osGetTime();
-			zrHoldTriggered = false;
-			press_count[press_idx] = zrPressTime;
-			press_idx = (press_idx + 1) % MAX_PRESSES;
+			zrPressCount[zrPressIdx] = zrPressTime;
+			zrPressIdx = (zrPressIdx + 1) % MAX_PRESSES;
 		}
 		if (kUp & KEY_ZL) {
 			zlPressTime = 0;
-			zlHoldTriggered = false;
 			/* clear combo flag on release */
 			keyZLComboPressed = false;
 		}
 		if (kUp & KEY_ZR) {
 			zrPressTime = 0;
-			zrHoldTriggered = false;
 			/* clear combo flag on release */
 			keyZRComboPressed = false;
 		}
@@ -512,6 +526,55 @@ int main(int argc, char **argv)
 
 			keyLComboPressed = true;
 			keyRComboPressed = true;
+			continue;
+		}
+		
+		// same thing as before but with ZL and ZR
+		if(kHeld & KEY_ZL)
+		{
+			/* Pause/Play */
+			if(kDown & (KEY_ZR | KEY_UP))
+			{
+				if(isPlaying() == false)
+					continue;
+
+				consoleSelect(&topScreenLog);
+				if(togglePlayback() == true)
+					puts("Paused");
+				else
+					puts("Playing");
+
+				keyZLComboPressed = true;
+				// distinguish between L+R and L+Up
+				if (KEY_ZR & kDown) {
+					keyZRComboPressed = true;
+				}
+				continue;
+			}
+
+			/* Show controls */
+			if(kDown & KEY_LEFT)
+			{
+				consoleSelect(&topScreenLog);
+				showControls();
+				keyZLComboPressed = true;
+				continue;
+			}
+		}
+		// if ZR is pressed first
+		if ((kHeld & KEY_ZR) && (kDown & KEY_ZL))
+		{
+			if(isPlaying() == false)
+				continue;
+
+			consoleSelect(&topScreenLog);
+			if(togglePlayback() == true)
+				puts("Paused");
+			else
+				puts("Playing");
+
+			keyZLComboPressed = true;
+			keyZRComboPressed = true;
 			continue;
 		}
 
@@ -660,24 +723,23 @@ int main(int argc, char **argv)
 		}
 
 		/* 
-		 * Handle song change for R and L:
-		 * - Instant change with ZR / ZL (unchanged)
-		 * - L/R physical buttons now require a 1 second continuous hold
-		 *   and are ignored if they were part of a combo (pause) press.
+		 * Handle song change for R/ZR and L/ZL:
+		 * - press L/ZL three times within half a second to go back one song
+		 * - same deal with R/ZR but it forwards to the next song
 		 */
 
-
-		int count = 0;
-		if ((kHeld & KEY_ZR) && zrPressTime != 0 && !zrHoldTriggered && !keyZRComboPressed) {
+		if ((kHeld & KEY_ZR) && zrPressTime != 0) {
 			for (int i = 0; i < MAX_PRESSES; i++){
-				if (zrPressTime - press_count[i] <= 1000) {
+				if (zrPressTime - zrPressCount[i] <= 1000) { // 1 second
 					count++;
 					if (count == MAX_PRESSES){
-						if (fileNum < fileMax && dirList.dirNum < fileNum+1) {
-							fileNum += 1;
-							if(fileNum >= MAX_LIST && fileMax - fileNum >= 0 &&
-									from < fileMax - MAX_LIST)
-								from++;
+						if (now - lastSkipTime > 1000){
+							if (fileNum < fileMax && dirList.dirNum < fileNum+1) {
+								fileNum += 1;
+								if(fileNum >= MAX_LIST && fileMax - fileNum >= 0 && from < fileMax - MAX_LIST)
+									from++;
+								lastSkipTime = now;
+							}
 							consoleSelect(&topScreenInfo);
 							consoleClear();
 							consoleSelect(&topScreenLog);
@@ -685,72 +747,94 @@ int main(int argc, char **argv)
 							error = 0;
 							consoleSelect(&bottomScreen);
 							if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
+							zrPressIdx = 0;
+							memset(zrPressCount, 0, sizeof(zrPressCount));
 						}
-					zrHoldTriggered = true;
-					//continue;
+					}
+				}
+			}
+		}
+		
+		if ((kHeld & KEY_ZL) && zlPressTime != 0) {
+			for (int i = 0; i < MAX_PRESSES; i++){
+				if (zlPressTime - zlPressCount[i] <= 1000) { 
+					count++;
+					if (count == MAX_PRESSES){
+						if (now - lastSkipTime > 1000){
+							if (fileNum > 1 && dirList.dirNum < fileNum-1) {
+								fileNum -= 1;
+								if(fileMax - fileNum > MAX_LIST-2 && from != 0)
+									from--;
+								lastSkipTime = now;
+							}
+							consoleSelect(&topScreenInfo);
+							consoleClear();
+							consoleSelect(&topScreenLog);
+							changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
+							error = 0;
+							consoleSelect(&bottomScreen);
+							if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
+							zlPressIdx = 0;
+							memset(zlPressCount, 0, sizeof(zlPressCount));
+							//zlHoldTriggered = true;
+						}
 					}
 				}
 			}
 		}
 
-		/* Instant previous (ZL) */ 
-		if ((kHeld & KEY_ZL) && zlPressTime != 0 && !zlHoldTriggered && !keyZLComboPressed) {
-			if (press_count[MAX_PRESSES] && osGetTime() - zlPressTime <= 1000) {
-				if (fileNum > 1 && dirList.dirNum < fileNum-1) {
-					fileNum -= 1;
-					if(fileMax - fileNum > MAX_LIST-2 && from != 0)
-						from--;
-					consoleSelect(&topScreenInfo);
-					consoleClear();
-					consoleSelect(&topScreenLog);
-					changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
-					error = 0;
-					consoleSelect(&bottomScreen);
-					if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
+		if ((kHeld & KEY_R) && rPressTime != 0) {
+			for (int i = 0; i < MAX_PRESSES; i++){
+				if (rPressTime - rPressCount[i] <= 1000) {
+					count++;
+					if (count == MAX_PRESSES){
+						if (now - lastSkipTime > 1000){
+							if (fileNum < fileMax && dirList.dirNum < fileNum+1) {
+								fileNum += 1;
+								if(fileNum >= MAX_LIST && fileMax - fileNum >= 0 && from < fileMax - MAX_LIST)
+									from++;
+								lastSkipTime = now;
+							}
+							consoleSelect(&topScreenInfo);
+							consoleClear();
+							consoleSelect(&topScreenLog);
+							changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
+							error = 0;
+							consoleSelect(&bottomScreen);
+							if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
+							rPressIdx = 0;                                
+							memset(rPressCount, 0, sizeof(rPressCount)); 
+						}
+					}
 				}
-			zlHoldTriggered = true;
-			continue;
-			}
-		} 
-
-		/* R held for >=2000ms: Next song (only if not part of combo) */
-		if ((kHeld & KEY_R) && rPressTime != 0 && !rHoldTriggered && !keyRComboPressed) {
-			if (osGetTime() - rPressTime >= 2000) {
-				if (fileNum < fileMax && dirList.dirNum < fileNum+1) {
-					fileNum += 1;
-					if(fileNum >= MAX_LIST && fileMax - fileNum >= 0 &&
-							from < fileMax - MAX_LIST)
-						from++;
-					consoleSelect(&topScreenInfo);
-					consoleClear();
-					consoleSelect(&topScreenLog);
-					changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
-					error = 0;
-					consoleSelect(&bottomScreen);
-					if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
-				}
-				rHoldTriggered = true;
-				continue;
 			}
 		}
 
 		/* L held for >=2000ms: Previous song (only if not part of combo) */
-		if ((kHeld & KEY_L) && lPressTime != 0 && !lHoldTriggered && !keyLComboPressed) {
-			if (osGetTime() - lPressTime >= 2000) {
-				if (fileNum > 1 && dirList.dirNum < fileNum-1) {
-					fileNum -= 1;
-					if(fileMax - fileNum > MAX_LIST-2 && from != 0)
-						from--;
-					consoleSelect(&topScreenInfo);
-					consoleClear();
-					consoleSelect(&topScreenLog);
-					changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
-					error = 0;
-					consoleSelect(&bottomScreen);
-					if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
+		if ((kHeld & KEY_L) && lPressTime != 0) {
+			for (int i = 0; i < MAX_PRESSES; i++){
+				if (lPressTime - lPressCount[i] <= 1000) {
+					count++;
+					if (count == MAX_PRESSES){
+						if (now - lastSkipTime > 1000){
+							if (fileNum > 1 && dirList.dirNum < fileNum-1) {
+								fileNum -= 1;
+								if(fileMax - fileNum > MAX_LIST-2 && from != 0)
+									from--;
+								lastSkipTime = now;
+							}
+							consoleSelect(&topScreenInfo);
+							consoleClear();
+							consoleSelect(&topScreenLog);
+							changeFile(dirList.files[fileNum - dirList.dirNum - 1], &playbackInfo);
+							error = 0;
+							consoleSelect(&bottomScreen);
+							if(listDir(from, MAX_LIST, fileNum, dirList) < 0) err_print("Unable to list directory.");
+							lPressIdx = 0;                                
+							memset(lPressCount, 0, sizeof(lPressCount));
+						}
+					}
 				}
-				lHoldTriggered = true;
-				continue;
 			}
 		}
 
